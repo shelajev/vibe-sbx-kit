@@ -1,48 +1,52 @@
-schemaVersion: "1"
-kind: agent
+schemaVersion: "2"
+kind: sandbox
 name: vibe
 displayName: Mistral Vibe
-description: Run Mistral Vibe, the Mistral CLI coding agent, in a Docker Sandbox with MISTRAL_API_KEY injected via the host proxy.
+description: Run Mistral Vibe in Docker Sandboxes with host-side MISTRAL_API_KEY injection.
+sourceURL: https://github.com/shelajev/vibe-sbx-kit
+licenses:
+  - Apache-2.0
 
-agent:
-  image: "docker/sandbox-templates:shell-docker"
+sandbox:
+  image: docker/sandbox-templates:shell-docker
   entrypoint:
-    run:
-      - vibe
+    - vibe
+
+permissions:
+  network:
+    allow:
+      - mistral.ai
+      - "*.mistral.ai"
+      - "*.mistral.services"
+      - astral.sh
+      - "*.astral.sh"
+      - pypi.org
+      - "*.pypi.org"
+      - files.pythonhosted.org
+      - github.com
+      - raw.githubusercontent.com
+      - objects.githubusercontent.com
+
+credentials:
+  - service: mistral
+    description: Mistral API key for Vibe
+    required: true
+    apiKey:
+      name: MISTRAL_API_KEY
+      proxyManaged: true
+      inject:
+        - domain: api.mistral.ai
+          scheme: bearer
+        - domain: console.mistral.ai
+          scheme: bearer
+        - domain: chat.mistral.ai
+          scheme: bearer
 
 environment:
   variables:
-    PATH: "/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-  proxyManaged:
-    - MISTRAL_API_KEY
+    PATH: /home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-credentials:
-  sources:
-    mistral:
-      env:
-        - MISTRAL_API_KEY
-
-network:
-  allowedDomains:
-    - "mistral.ai"
-    - "*.mistral.ai"
-    - "*.mistral.services"
-    - "astral.sh"
-    - "*.astral.sh"
-    - "pypi.org"
-    - "*.pypi.org"
-    - "files.pythonhosted.org"
-    - "github.com"
-    - "raw.githubusercontent.com"
-    - "objects.githubusercontent.com"
-  serviceDomains:
-    api.mistral.ai: mistral
-  serviceAuth:
-    mistral:
-      headerName: Authorization
-      valueFormat: "Bearer %s"
-
-commands:
+setup:
   install:
     - command: "curl -LsSf https://mistral.ai/vibe/install.sh | bash"
       user: "1000"

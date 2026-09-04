@@ -8,4 +8,4 @@ if [[ $# -gt 0 ]]; then
   shift
 fi
 
-exec sbx run --kit "$kit_dir" "$sandbox" "$@"
+exec sbx run vibe --name "$sandbox" --kit "$kit_dir" . "$@"
