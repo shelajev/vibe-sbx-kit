@@ -1,0 +1,93 @@
+# syntax=docker/sandbox-kit:3
+# Mistral Vibe as a WORKLOAD kit: the shell-docker sandbox template with
+# mistral-vibe baked in at a pinned release, the Mistral API key held by the
+# sandbox proxy, and egress scoped to the hosts Vibe actually calls.
+#
+# Migrated from the v1 spec.yaml (kind: agent + install hook). The content
+# recipe is the companion vibe.dockerfile, found by filename stem.
+schemaVersion: "3"
+displayName: Mistral Vibe
+author: "Oleg Šelajev"
+description: >-
+  Mistral Vibe, Mistral's CLI coding agent, in a Docker Sandbox with
+  MISTRAL_API_KEY injected by the host proxy -- the real key never enters
+  the sandbox.
+sourceUrl: https://github.com/shelajev/vibe-sbx-kit
+licenses: [Apache-2.0]
+version: "${{ kit.args.version }}"
+
+kind: workload
+
+args:
+  version:
+    default: "2.25.8"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    description: mistral-vibe release (PyPI) to install
+    buildArg: VIBE_VERSION
+
+provides: ["vibe@${{ kit.args.version }}"]
+
+capabilities:
+  # An agent sandbox: the host launches the agent rather than running the
+  # image entrypoint as PID 1, and honors the image's `agent` user.
+  - type: com.docker.sandbox/sbx@1
+
+  # Runtime only: the install now happens at build (vibe.dockerfile), so
+  # v1's install-time hosts -- mistral.ai (install.sh), astral.sh, PyPI,
+  # GitHub -- are gone. Add hosts here if your work needs them, or allow
+  # them on the host with `sbx policy allow network`.
+  #
+  # Every host a credential injects into is listed LITERALLY. The v3
+  # validator checks inject domains against this list by exact match; a
+  # wildcard such as *.mistral.ai still permits egress at run time but does
+  # not count as covering an inject domain. v1 listed only the wildcards,
+  # which is the prime suspect for the key never being substituted.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          # Inference API (DEFAULT_MISTRAL_SERVER_URL).
+          - api.mistral.ai:443
+          # Vibe base URL: org admin-managed config is fetched here at start.
+          - chat.mistral.ai:443
+          # Console: /users/me identity lookup and browser sign-in.
+          - console.mistral.ai:443
+          # Other Mistral hosts Vibe links to or may reach (docs, etc.).
+          - "*.mistral.ai:443"
+          # Feature-flag service; only used with telemetry on, which the
+          # image turns off. Kept so enabling it does not silently break.
+          - experiments.mistral.services:443
+
+  # v1: credentials.sources + network.serviceDomains/serviceAuth +
+  # environment.proxyManaged, folded into one entry. Vibe sends the same
+  # key as `Authorization: Bearer` to all three hosts below (inference,
+  # managed config, identity); v1 injected only on api.mistral.ai.
+  #
+  # Required, not optional: without the key Vibe cannot answer anything,
+  # so failing at create with "bind the mistral credential" beats a
+  # sandbox that starts and then 401s.
+  - type: com.docker.sandbox/credential@1
+    description: "Mistral API key (https://console.mistral.ai/api-keys)"
+    config:
+      service: mistral
+      phase: runtime
+      apiKey:
+        name: MISTRAL_API_KEY
+        proxyManaged: true
+        inject:
+          - {domain: api.mistral.ai, header: Authorization, format: "Bearer %s"}
+          - {domain: chat.mistral.ai, header: Authorization, format: "Bearer %s"}
+          - {domain: console.mistral.ai, header: Authorization, format: "Bearer %s"}
+
+  # Headless verbs, appended to the image entrypoint (`vibe --trust`).
+  - type: com.docker.sandbox/agent-sessions@1
+    config:
+      prompt: ["-p", "{{.Prompt}}"]
+      resume: ["--resume", "{{.SessionID}}"]
+      continue: ["--continue"]
+
+  # Vibe loads ~/.vibe/AGENTS.md plus every AGENTS.md up the trust chain.
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      filename: AGENTS.md
+      contentFile: ./vibe-context.md

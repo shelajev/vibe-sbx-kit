@@ -1,102 +1,67 @@
 # Mistral Vibe Docker Sandboxes Kit
 
-Docker Sandboxes kit that installs [Mistral Vibe](https://mistral.ai/products/vibe), Mistral's CLI coding agent, inside a sandbox. The host proxy injects your Mistral API key into outbound requests, so the real key never enters the sandbox.
-
-Requires Docker Sandboxes 0.39.0 or newer. Kits are experimental and their schema may change.
+A [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) kit (spec v3) that runs [Mistral Vibe](https://github.com/mistralai/mistral-vibe), Mistral's CLI coding agent, with your Mistral API key held by the host proxy. The real key never enters the sandbox.
 
 ## Quick start
 
-1. **Get a Mistral API key** at <https://console.mistral.ai/>.
-
-2. **Store it as a sandbox secret.** The key lands in your OS keychain; the real value never enters the sandbox.
-
-   ```bash
-   sbx secret set mistral
-   # paste the key when prompted
-   ```
-
-3. **Allow this GitHub repository as a kit source.** The command preserves Docker Hub in the allowlist.
+1. Get a key at <https://console.mistral.ai/api-keys>.
+2. Store it on the host under the `mistral` service:
 
    ```bash
-   sbx settings set kit.allowedSources '["docker.io/","github.com/shelajev/"]'
+   sbx secret set mistral        # paste the key when prompted
    ```
 
-4. **Run a sandbox with the kit attached.** Replace `.` with the workspace path you want.
+3. Run it on a workspace:
 
    ```bash
-   sbx run vibe --kit git+https://github.com/shelajev/vibe-sbx-kit.git .
+   sbx run docker.io/shelajev/sbx-kit-vibe:latest .
+   # or straight from git (built on demand):
+   sbx run git+https://github.com/shelajev/vibe-sbx-kit.git .
    ```
 
-That's it. The sandbox boots into `vibe`'s interactive coding session, with full filesystem access to your mounted workspace and proxy-authenticated access to Mistral's API, account, and managed-config endpoints.
-
-## Named sandbox
-
-For a persistent sandbox you can re-attach to:
-
-```bash
-sbx create --name vibe-current \
-  --kit git+https://github.com/shelajev/vibe-sbx-kit.git vibe .
-
-sbx run --name vibe-current
-```
-
-The kit is applied when Docker Sandboxes creates the sandbox. Reattaching does not need the kit reference again.
-
-## Non-interactive run
-
-Pass vibe flags after `--`. In programmatic mode (`-p` / `--prompt`), vibe expects stdin to be closed — otherwise it sits waiting for input even though it has a prompt:
-
-```bash
-sbx exec vibe-current -- bash -c \
-  'vibe -p "summarize the public API of this repo" --output text --max-turns 1 </dev/null'
-```
+The sandbox boots into Vibe's interactive session in your workspace.
 
 ## Smoke test
 
-After creating the sandbox:
-
 ```bash
-sbx exec vibe-current -- bash -c \
-  'vibe -p "Reply with exactly: sbx-ok" --output text --max-turns 1 --max-price 0.05 </dev/null'
+sbx create --name vibe-test docker.io/shelajev/sbx-kit-vibe:latest .
+sbx exec vibe-test -- bash -c \
+  'vibe --trust -p "Reply with exactly: sbx-ok" --output text --max-turns 1 --max-price 0.05 </dev/null'
 ```
 
-Expected output: `sbx-ok`.
+Expected output: `sbx-ok`. In `-p` mode Vibe waits on stdin, hence `</dev/null`. If you get a 401, check `sbx secret ls` for a `mistral` entry and look at `sbx policy log vibe-test` for the Mistral hosts.
 
 ## How it works
 
-The kit declares a `mistral` service in `spec.yaml`. The Docker Sandboxes proxy reads your stored `mistral` secret on the host and substitutes `Authorization: Bearer <token>` into outbound requests to `api.mistral.ai`, `console.mistral.ai`, and `chat.mistral.ai`. Inside the sandbox, `MISTRAL_API_KEY` is set to a sentinel value (`proxy-managed`) so Vibe sees a non-empty env var without ever seeing the real key.
+The kit is one OCI image. `vibe.yaml` is the descriptor and `vibe.dockerfile` is the content recipe: the `docker/sandbox-templates:shell-docker` base with `mistral-vibe` installed by `uv tool install` at a pinned release. It declares:
 
-Install (runs once at sandbox creation, as the agent user):
+- **credential `mistral`**: `MISTRAL_API_KEY` inside the sandbox is a sentinel. The proxy substitutes `Authorization: Bearer <key>` on `api.mistral.ai` (inference), `chat.mistral.ai` (org-managed config) and `console.mistral.ai` (identity). Those are the three hosts Vibe sends the key to.
+- **network policy**: the three hosts above, `*.mistral.ai`, and `experiments.mistral.services`. Inject domains are listed literally because v3 checks them against the allow list by exact match, and a wildcard doesn't count.
+- **agent sessions**: `-p`, `--resume` and `--continue` for headless use.
+- **agent context**: an `AGENTS.md` telling Vibe it is sandboxed.
 
-- `curl -LsSf https://mistral.ai/vibe/install.sh | bash` — installs `uv` (Astral's Python package manager) then `uv tool install mistral-vibe`, placing `vibe` and `vibe-acp` in `~/.local/bin`
+Telemetry and self-update are off (`VIBE_ENABLE_TELEMETRY` / `VIBE_ENABLE_AUTO_UPDATE`). The Vibe version is whatever the image ships. The entrypoint is `vibe --trust`, since the workspace is your own mounted project.
 
-The kit prepends `/home/agent/.local/bin` to `PATH` so `vibe` resolves without manual sourcing.
+Need more egress (a package index, GitHub)? Extend `network-policy@1` in `vibe.yaml`, or run `sbx policy allow network <host>` on the host.
 
-## Network policy
-
-The allowlist (verified by actually creating a sandbox and watching `sbx policy log`):
-
-- `mistral.ai`, `*.mistral.ai` — install script, model API (`api.mistral.ai`), account lookup (`console.mistral.ai`), and managed config (`chat.mistral.ai`)
-- `*.mistral.services` — Vibe's experiments / feature-flag service (`experiments.mistral.services`)
-- `astral.sh`, `*.astral.sh` — `uv` installer download
-- `pypi.org`, `*.pypi.org`, `files.pythonhosted.org` — Python package downloads for `mistral-vibe` and its deps (`files.pythonhosted.org` sees ~50 hits during install)
-- `github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` — uv's installer is served from `raw.githubusercontent.com`; some wheels resolve via `objects.githubusercontent.com`
-
-If you want Vibe to reach additional services from inside the sandbox (for example, a private package index or third-party API), fork this kit and extend `permissions.network.allow` in `spec.yaml`. Use `sbx policy log <sandbox>` to discover what's being blocked.
-
-## Local clone
-
-If you clone this repo, `run.sh` creates and runs a named sandbox using the local kit path:
+## Local development
 
 ```bash
-./run.sh vibe-current
+docker buildx build . -f vibe.yaml --output type=cacheonly   # validate + build
+sbx run ./ .                                                 # run from this checkout
+./run.sh my-sandbox                                          # same, named
 ```
 
-Use any new sandbox name as the first argument; Vibe flags go after `--`. Reattach later with `sbx run --name <sandbox>`.
+## Publishing
 
-```bash
-./run.sh my-sandbox -- --prompt "what tests are missing?"
-```
+- `.github/workflows/build.yml` builds for amd64 and arm64 and runs `kit-tck` on every push and PR. Nothing is pushed.
+- `.github/workflows/publish.yml` pushes to Docker Hub when a `vX.Y.Z` tag is pushed. The tag is the mistral-vibe release to bake in:
+
+  ```bash
+  git tag v2.25.8 && git push origin v2.25.8
+  ```
+
+  It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Hub access token with Read & Write). You can also set the repo variable `DOCKERHUB_REPOSITORY`; it defaults to `<username>/sbx-kit-vibe`. It publishes `:X.Y.Z` and `:latest`.
 
 ## License
 
