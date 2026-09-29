@@ -14,7 +14,7 @@ A [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) kit (spec v3) that r
 3. Run it on a workspace:
 
    ```bash
-   sbx run docker.io/shelajev/sbx-kit-vibe:latest .
+   sbx run docker.io/olegselajev241/sbx-kit-vibe:latest .
    # or straight from git (built on demand):
    sbx run git+https://github.com/shelajev/vibe-sbx-kit.git .
    ```
@@ -24,7 +24,7 @@ The sandbox boots into Vibe's interactive session in your workspace.
 ## Smoke test
 
 ```bash
-sbx create --name vibe-test docker.io/shelajev/sbx-kit-vibe:latest .
+sbx create --name vibe-test docker.io/olegselajev241/sbx-kit-vibe:latest .
 sbx exec vibe-test -- bash -c \
   'vibe --trust -p "Reply with exactly: sbx-ok" --output text --max-turns 1 --max-price 0.05 </dev/null'
 ```
