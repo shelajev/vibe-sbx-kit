@@ -1,0 +1,90 @@
+name: Publish kit
+
+# Publishes the kit to Docker Hub when a version tag is pushed:
+#
+#   git tag v2.25.8 && git push origin v2.25.8
+#
+# The tag IS the mistral-vibe release: it is passed as the kit's `version` arg,
+# which drives the install, the `provides` entry, the descriptor's `version:`
+# and the image tag, so the tag says exactly what the image contains. The
+# build fails if that release does not exist on PyPI.
+#
+# Requires, in Settings -> Secrets and variables -> Actions:
+#   secret   DOCKERHUB_USERNAME   Docker Hub user
+#   secret   DOCKERHUB_TOKEN      Docker Hub access token with Read & Write
+#   variable DOCKERHUB_REPOSITORY optional, defaults to <username>/sbx-kit-vibe
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: mistral-vibe release to publish (e.g. 2.25.8)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve version and repository
+        id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO_VAR: ${{ vars.DOCKERHUB_REPOSITORY }}
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          version="${INPUT_VERSION:-${REF_NAME#v}}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version '$version' is not X.Y.Z"; exit 1
+          fi
+          repo="${REPO_VAR:-${HUB_USER}/sbx-kit-vibe}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=docker.io/$repo" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # One invocation for both platforms: two single-platform pushes to one
+      # tag would overwrite each other's index.
+      - name: Build and push
+        run: |
+          docker buildx build . -f vibe.yaml \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg version=${{ steps.meta.outputs.version }} \
+            --provenance=true \
+            -t ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }} \
+            -t ${{ steps.meta.outputs.image }}:latest \
+            --push
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Conformance of the published kit (kit-tck)
+        run: |
+          go install github.com/docker/sandbox-kit-spec/v3/cmd/kit-tck@latest
+          "$(go env GOPATH)/bin/kit-tck" validate ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+
+      - name: Summary
+        run: |
+          echo "Published \`${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "sbx run ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }} ." >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

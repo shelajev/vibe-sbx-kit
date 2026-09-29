@@ -1,0 +1,44 @@
+name: Build kit
+
+# Builds the v3 kit on every push and PR. The sandbox-kit frontend validates
+# the descriptor before it solves the recipe, so a bad field fails here in
+# seconds; a good one goes on to install Vibe for both platforms and judge the
+# artifact with kit-tck. Nothing is pushed -- see publish.yml for that.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build kit (linux/amd64, linux/arm64)
+        run: |
+          docker buildx build . -f vibe.yaml \
+            --platform linux/amd64,linux/arm64 \
+            -t vibe-kit:ci \
+            --output type=oci,dest=/tmp/vibe-layout,tar=false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Conformance (kit-tck)
+        run: |
+          go install github.com/docker/sandbox-kit-spec/v3/cmd/kit-tck@latest
+          "$(go env GOPATH)/bin/kit-tck" validate --layout /tmp/vibe-layout ci
+
+      - name: Check wrapper syntax
+        run: bash -n run.sh
